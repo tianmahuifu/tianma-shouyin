@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1a7f5a">
+<title>天马收银 · 数据找回</title>
+<style>
+  :root{
+    --bg:#f4f6f5; --card:#fff; --text:#1d2321; --sub:#6b7672;
+    --line:#e2e7e4; --green:#1a7f5a; --green-d:#156a4a;
+    --amber:#b8730a; --amber-bg:#fff7e6; --red:#c0392b; --red-bg:#fdf0ee;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    padding:16px 14px 48px;}
+  .wrap{max-width:560px;margin:0 auto}
+  h1{font-size:19px;margin:4px 0 6px}
+  .sub{color:var(--sub);font-size:13px;margin:0 0 16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .warn{background:var(--amber-bg);border-color:#f0dcb4;color:#7a5104;font-size:13.5px}
+  .warn b{color:#5d3d00}
+  textarea{width:100%;min-height:150px;border:1px solid var(--line);border-radius:10px;
+    padding:12px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;resize:vertical;background:#fbfcfb}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  button{flex:1 1 140px;border:1px solid var(--line);background:#fff;color:var(--text);
+    border-radius:10px;padding:12px 14px;font-size:15px;font-weight:600;cursor:pointer}
+  button.pri{background:var(--green);border-color:var(--green);color:#fff}
+  button.pri:active{background:var(--green-d)}
+  button.danger{background:#fff;border-color:#e8bdb7;color:var(--red)}
+  button:disabled{opacity:.45}
+  .stat{font-size:14px;margin-top:12px;padding:10px 12px;border-radius:9px;background:#f3f8f5;
+    border:1px solid #d8e9df;color:#245b44;display:none}
+  .stat.err{background:var(--red-bg);border-color:#f0cdc7;color:#8e2b1f}
+  .stat b{font-size:16px}
+  .note{font-size:12.5px;color:var(--sub);margin:10px 0 0}
+  a.back{display:inline-block;margin-top:16px;color:var(--green);font-size:14px;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>数据找回</h1>
+  <p class="sub">把旧地址里那串数据粘进来，写回这台设备。</p>
+
+  <div class="card warn">
+    <b>先别清浏览器数据。</b>旧域名下的记录还在手机里，只是新域名读不到。<br>
+    这个页面只做一件事：把你粘进来的数据写进<b>当前域名</b>的本地存储。
+  </div>
+
+  <div class="card">
+    <div style="font-weight:600;margin-bottom:8px">① 粘贴旧数据</div>
+    <textarea id="inp" placeholder='把 localStorage 里 jizhang_v1 的完整内容粘到这里（以 {"orders":[... 开头）'></textarea>
+    <div id="stat" class="stat"></div>
+    <div class="row">
+      <button class="pri" id="btnMerge" disabled>合并到现有记录</button>
+      <button class="danger" id="btnReplace" disabled>完全覆盖</button>
+    </div>
+    <p class="note">建议先点「合并」——重复的单会按 id 自动跳过，不会丢现有记录。只有确认现有数据不要了，才用「覆盖」。</p>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:600;margin-bottom:8px">当前这台设备</div>
+    <div id="cur" class="note" style="margin-top:0">正在读取…</div>
+    <div class="row">
+      <button id="btnDl">把当前数据导出成文件</button>
+    </div>
+  </div>
+
+  <a class="back" href="./index.html">← 回到记账首页</a>
+</div>
+
+<script>
+(function(){
+  var KEY = "jizhang_v1";
+  var $ = function(id){ return document.getElementById(id); };
+  var parsed = null;
+
+  function curDb(){
+    try{
+      var raw = localStorage.getItem(KEY);
+      if(!raw) return { orders:[], opts:{}, meta:{}, trash:[] };
+      var o = JSON.parse(raw);
+      if(!o || !Array.isArray(o.orders)) return { orders:[], opts:{}, meta:{}, trash:[] };
+      return o;
+    }catch(e){ return { orders:[], opts:{}, meta:{}, trash:[] }; }
+  }
+
+  function parseInput(text){
+    var t = String(text || "").trim();
+    if(!t) return null;
+    // 允许前后带说明文字：截取第一个 { 到最后一个 }
+    var i = t.indexOf("{"), j = t.lastIndexOf("}");
+    if(i < 0 || j <= i) return null;
+    var body = t.slice(i, j + 1);
+    try{
+      var o = JSON.parse(body);
+      if(o && Array.isArray(o.orders)) return o;
+    }catch(e){}
+    return null;
+  }
+
+  function rangeOf(orders){
+    var ds = orders.map(function(o){ return o && o.date; }).filter(Boolean).sort();
+    if(!ds.length) return "无日期";
+    return ds[0] + " ~ " + ds[ds.length - 1];
+  }
+
+  function refresh(){
+    var d = curDb();
+    $("cur").textContent = d.orders.length
+      ? "已有 " + d.orders.length + " 条记录（" + rangeOf(d.orders) + "）"
+      : "当前是空的（0 条记录）";
+  }
+
+  $("inp").addEventListener("input", function(){
+    var st = $("stat");
+    parsed = parseInput(this.value);
+    if(!this.value.trim()){
+      st.style.display = "none";
+      $("btnMerge").disabled = true;
+      $("btnReplace").disabled = true;
+      return;
+    }
+    if(!parsed){
+      st.className = "stat err";
+      st.style.display = "block";
+      st.innerHTML = "没认出有效数据。要包含 <code>\"orders\"</code> 数组，通常是整段以 <code>{\"orders\":</code> 开头。";
+      $("btnMerge").disabled = true;
+      $("btnReplace").disabled = true;
+      return;
+    }
+    st.className = "stat";
+    st.style.display = "block";
+    st.innerHTML = "识别到 <b>" + parsed.orders.length + "</b> 条记录　·　" + rangeOf(parsed.orders);
+    $("btnMerge").disabled = false;
+    $("btnReplace").disabled = false;
+  });
+
+  function finish(n, msg){
+    refresh();
+    alert(msg + "\n\n共 " + n + " 条。接下来会打开记账首页。");
+    location.href = "./index.html";
+  }
+
+  $("btnMerge").onclick = function(){
+    if(!parsed) return;
+    var db = curDb();
+    var ids = {};
+    db.orders.forEach(function(x){ if(x && x.id) ids[x.id] = 1; });
+    var added = 0;
+    parsed.orders.forEach(function(x){
+      if(!x || typeof x !== "object") return;
+      if(!x.id) x.id = "r" + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+      if(!ids[x.id]){ db.orders.push(x); ids[x.id] = 1; added++; }
+    });
+    if(parsed.opts){
+      ["source","device","fault"].forEach(function(k){
+        if(!Array.isArray(parsed.opts[k])) return;
+        db.opts = db.opts || {};
+        var cur = Array.isArray(db.opts[k]) ? db.opts[k] : [];
+        var seen = {}; cur.forEach(function(v){ seen[v] = 1; });
+        parsed.opts[k].forEach(function(v){ if(!seen[v]){ cur.push(v); seen[v] = 1; } });
+        db.opts[k] = cur;
+      });
+    }
+    if(parsed.meta && parsed.meta.shop && !(db.meta && db.meta.shop)){
+      db.meta = db.meta || {};
+      db.meta.shop = parsed.meta.shop;
+    }
+    localStorage.setItem(KEY, JSON.stringify(db));
+    finish(added, "合并完成，新增 " + added + " 条（重复的已跳过）。");
+  };
+
+  $("btnReplace").onclick = function(){
+    if(!parsed) return;
+    var n = parsed.orders.length;
+    if(!confirm("确定用这份数据完全覆盖这台设备吗？\n\n覆盖后，当前设备原有的 " + curDb().orders.length + " 条记录会被替换掉。")) return;
+    var out = {
+      orders: parsed.orders,
+      opts: parsed.opts || {},
+      meta: parsed.meta || { shop:"", lastBackup:null },
+      trash: Array.isArray(parsed.trash) ? parsed.trash : []
+    };
+    localStorage.setItem(KEY, JSON.stringify(out));
+    finish(n, "已覆盖写入。");
+  };
+
+  $("btnDl").onclick = function(){
+    var db = curDb();
+    if(!db.orders.length){ alert("当前设备没有记录可导出。"); return; }
+    var payload = { app:"jizhang", v:1, exportedAt:new Date().toISOString(),
+      orders:db.orders, opts:db.opts || {}, meta:db.meta || {} };
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" }));
+    a.download = "接单记账备份_" + new Date().toISOString().slice(0,10) + ".json";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ a.remove(); }, 800);
+  };
+
+  refresh();
+})();
+</script>
+</body>
+</html>
